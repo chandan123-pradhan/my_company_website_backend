@@ -56,6 +56,7 @@ func ParseToken(tokenString string) (int, error) {
 		// Return the secret key
 		return []byte(os.Getenv("JWT_SECRET")), nil
 	})
+	
 
 	if err != nil {
 		return 0, err

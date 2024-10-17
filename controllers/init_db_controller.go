@@ -22,7 +22,7 @@ var DB *sql.DB
 // the database is ready for use.
 func InitDB() {
 	var err error
-	DB, err = sql.Open("mysql", "root:NewPasswordHere@tcp(localhost:3306)/learning_platform")
+	DB, err = sql.Open("mysql", "root:NewPasswordHere@tcp(railway.app:3306)/learning_platform")
 	if err != nil {
 		log.Fatal(err) // Log and terminate if there is an error opening the database
 	}
