@@ -3,8 +3,12 @@ package controllers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"blog_project.com/models"
 	"blog_project.com/utils"
@@ -21,68 +25,100 @@ func Initialize(database *sql.DB) {
 	db = database
 }
 
-// CreateUser handles user registration.
-//
-// It decodes the incoming request body to extract user information,
-// validates the input, hashes the password, inserts the user
-// into the database, generates a token, and returns a JSON response
-// with user details and a success message.
 func CreateUser(w http.ResponseWriter, r *http.Request) {
-	var user models.RegisterUserModel
+    // Limit the size of the request body
+    r.ParseMultipartForm(10 << 20) // 10MB max file size
 
-	// Decode request body
-	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
-		return
-	}
+    // Parse the multipart form
+    fullName := r.FormValue("full_name")
+    email := r.FormValue("email")
+    password := r.FormValue("password")
 
-	// Validate input fields
-	errors := utils.ValidateUserInput(user, true) // true for registration
-	if len(errors) > 0 {
-		respondWithError(w, http.StatusBadRequest, utils.ErrorMessages(errors))
-		return
-	}
 
-	// Hash the password
-	hashedPassword, err := utils.HashPassword(user.Password)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to hash password")
-		return
-	}
+	if fullName == "" {
+        respondWithError(w, http.StatusBadRequest, "Full name is mandatory")
+        return
+    }
+    if email == "" {
+        respondWithError(w, http.StatusBadRequest, "Email is mandatory")
+        return
+    }
+    if password == "" {
+        respondWithError(w, http.StatusBadRequest, "Password is mandatory")
+        return
+    }
+    // Get the file from the form input
+    file, handler, err := r.FormFile("profile_pic")
+    if err != nil {
+        respondWithError(w, http.StatusBadRequest, "Profile picture is mandatory")
+        return
+    }
+    defer file.Close()
 
-	// Insert user into the database
-	result, err := db.Exec("INSERT INTO users (full_name, email, profile_pic, password) VALUES (?, ?, ?, ?)",
-		user.FullName, user.Email, user.ProfilePic, hashedPassword)
-	if err != nil {
-		respondWithError(w, http.StatusConflict, "Email ID already exists")
-		return
-	}
+    // Create unique file name with timestamp
+    fileName := fmt.Sprintf("uploads/%d-%s", time.Now().Unix(), handler.Filename)
 
-	// Retrieve the new user ID
-	userId, err := result.LastInsertId()
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve user ID")
-		return
-	}
-	user.ID = int(userId)
+    // Save the file to the server
+    outFile, err := os.Create(fileName)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to save profile picture")
+        return
+    }
+    defer outFile.Close()
 
-	// Generate a token
-	token, err := utils.GenerateToken(user.ID, user.Email)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate token, please try again")
-		return
-	}
+    // Copy the uploaded file's content to the new file
+    _, err = io.Copy(outFile, file)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to store profile picture")
+        return
+    }
 
-	// Build success response
-	successResponse := models.Response{
-		Status:  true,
-		Message: "User registration successful",
-		Data:    user,
-		Token:   token,
-	}
+    // Hash the password
+    hashedPassword, err := utils.HashPassword(password)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to hash password")
+        return
+    }
 
-	respondWithJSON(w, http.StatusOK, successResponse)
+    // Insert user into the database
+    result, err := db.Exec("INSERT INTO users (full_name, email, password, profile_pic) VALUES (?, ?, ?, ?)",
+        fullName, email, hashedPassword, fileName)
+    if err != nil {
+        respondWithError(w, http.StatusConflict, "Email ID already exists")
+        return
+    }
+
+    // Retrieve the new user ID
+    userId, err := result.LastInsertId()
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to retrieve user ID")
+        return
+    }
+
+    // Generate a token for the user
+    token, err := utils.GenerateToken(int(userId), email)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to generate token, please try again")
+        return
+    }
+
+    // Build success response
+    successResponse := models.Response{
+        Status:  true,
+        Message: "User registration successful",
+        Data: map[string]interface{}{
+            "id":          userId,
+            "full_name":   fullName,
+            "email":       email,
+            "profile_pic": fileName,
+        },
+        Token: token,
+    }
+
+    respondWithJSON(w, http.StatusOK, successResponse)
 }
+
+
 
 // LoginUser handles user login.
 //
@@ -91,59 +127,63 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 // checks the password, generates a token, and returns a JSON
 // response with user details and a success message.
 func LoginUser(w http.ResponseWriter, r *http.Request) {
-	var user models.LoginUserModel
-	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
-		return
-	}
+    var user models.LoginUserModel
+    if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+        respondWithError(w, http.StatusBadRequest, "Invalid request payload")
+        return
+    }
 
-	// Validate input fields
-	errors := utils.ValidateUserInput(user, false) // false for login
-	if len(errors) > 0 {
-		respondWithError(w, http.StatusBadRequest, utils.ErrorMessages(errors))
-		return
-	}
+    // Validate input fields
+    errors := utils.ValidateUserInput(user, false) // false for login
+    if len(errors) > 0 {
+        respondWithError(w, http.StatusBadRequest, utils.ErrorMessages(errors))
+        return
+    }
 
-	// Retrieve user from database
-	var dbUser models.RegisterUserModel
-	err := db.QueryRow("SELECT id, full_name, email, profile_pic, password FROM users WHERE email = ?", user.Email).Scan(
-		&dbUser.ID, &dbUser.FullName, &dbUser.Email, &dbUser.ProfilePic, &dbUser.Password,
-	)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid email or password")
-		return
-	}
+    // Retrieve user from database
+    var dbUser models.RegisterUserModel
+    err := db.QueryRow("SELECT id, full_name, email, profile_pic, password FROM users WHERE email = ?", user.Email).Scan(
+        &dbUser.ID, &dbUser.FullName, &dbUser.Email, &dbUser.ProfilePic, &dbUser.Password,
+    )
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, "Invalid email or password")
+        return
+    }
 
-	// Check password
-	if err := utils.CheckPasswordHash(user.Password, dbUser.Password); err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid email or password")
-		return
-	}
+    // Check password
+    if err := utils.CheckPasswordHash(user.Password, dbUser.Password); err != nil {
+        respondWithError(w, http.StatusUnauthorized, "Invalid email or password")
+        return
+    }
 
-	// Generate token
-	token, err := utils.GenerateToken(dbUser.ID, dbUser.Email)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate token, please try again")
-		return
-	}
+    // Generate token
+    token, err := utils.GenerateToken(dbUser.ID, dbUser.Email)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to generate token, please try again")
+        return
+    }
 
-	// Prepare login response
-	loginResponse := models.LoginResponse{
-		ID:         dbUser.ID,
-		FullName:   dbUser.FullName,
-		Email:      dbUser.Email,
-		ProfilePic: dbUser.ProfilePic,
-	}
+    // Construct the full URL or file path for the profile picture
+    profilePicURL := fmt.Sprintf("/uploads/%s", dbUser.ProfilePic) // Adjust if needed for full URL
 
-	// Send success response
-	successResponse := models.Response{
-		Status:  true,
-		Message: "Login successful",
-		Data:    loginResponse,
-		Token:   token,
-	}
-	respondWithJSON(w, http.StatusOK, successResponse)
+    // Prepare login response with profile_pic URL
+    loginResponse := models.LoginResponse{
+        ID:         dbUser.ID,
+        FullName:   dbUser.FullName,
+        Email:      dbUser.Email,
+        ProfilePic: profilePicURL,  // Return the profile picture URL or file path
+    }
+
+    // Send success response
+    successResponse := models.Response{
+        Status:  true,
+        Message: "Login successful",
+        Data:    loginResponse,
+        Token:   token,
+    }
+    respondWithJSON(w, http.StatusOK, successResponse)
 }
+
 
 
 // GetUserProfile retrieves the user's profile data based on the user ID

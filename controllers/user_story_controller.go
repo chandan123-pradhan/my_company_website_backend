@@ -65,63 +65,65 @@ func AddStory(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, successResponse)
 }
 
+func GetStory(w http.ResponseWriter, r *http.Request) {
+    var userID int
+    var err error
 
-func GetStory(w http.ResponseWriter, r *http.Request){
-	var userID int
-	var err error
+    // Extract and validate token from the header
+    tokenString := r.Header.Get("Authorization")
+    if tokenString == "" {
+        respondWithError(w, http.StatusUnauthorized, "Missing authorization token")
+        return
+    }
+    tokenString = strings.TrimSpace(strings.TrimPrefix(tokenString, "Bearer "))
+    if tokenString == "" {
+        respondWithError(w, http.StatusUnauthorized, "Invalid token format")
+        return
+    }
 
-	// Extract and validate token from the header
-	tokenString := r.Header.Get("Authorization")
-	if tokenString == "" {
-		respondWithError(w, http.StatusUnauthorized, "Missing authorization token")
-		return
-	}
-	tokenString = strings.TrimSpace(strings.TrimPrefix(tokenString, "Bearer "))
-	if tokenString == "" {
-		respondWithError(w, http.StatusUnauthorized, "Invalid token format")
-		return
-	}
+    // Parse the user ID from the token
+    userID, err = utils.ParseToken(tokenString)
+    if err != nil {
+        respondWithError(w, http.StatusUnauthorized, "Invalid or expired token")
+        return
+    }
 
-	// Parse the user ID from the token
-	userID, err = utils.ParseToken(tokenString)
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid or expired token")
-		return
-	}
+    // Retrieve all stories and their story IDs for the given user ID
+    rows, err := db.Query("SELECT id, stories FROM usersStory WHERE userId = ?", userID)
+    if err != nil {
+        respondWithError(w, http.StatusInternalServerError, "Failed to retrieve stories")
+        return
+    }
+    defer rows.Close()
 
-	// Retrieve all stories for the given user ID
-	rows, err := db.Query("SELECT stories FROM usersStory WHERE userId = ?", userID)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to retrieve stories")
-		return
-	}
-	defer rows.Close()
-	// Collect all stories in a slice
-	var stories []map[string]interface{}
-	for rows.Next() {
-		var storyData sql.NullString
-		if err := rows.Scan(&storyData); err != nil {
-			respondWithError(w, http.StatusInternalServerError, "Failed to read story")
-			return
-		}
+    // Collect all stories and their IDs in a slice
+    var stories []map[string]interface{}
+    for rows.Next() {
+        var storyID int
+        var storyData sql.NullString
+        if err := rows.Scan(&storyID, &storyData); err != nil {
+            respondWithError(w, http.StatusInternalServerError, "Failed to read story")
+            return
+        }
 
-		// Unmarshal JSON data if valid
-		if storyData.Valid {
-			var story map[string]interface{}
-			if err := json.Unmarshal([]byte(storyData.String), &story); err != nil {
-				respondWithError(w, http.StatusInternalServerError, "Failed to parse story data")
-				return
-			}
-			stories = append(stories, story)
-		}
-	}
+        // Unmarshal JSON data if valid
+        if storyData.Valid {
+            var story map[string]interface{}
+            if err := json.Unmarshal([]byte(storyData.String), &story); err != nil {
+                respondWithError(w, http.StatusInternalServerError, "Failed to parse story data")
+                return
+            }
+            // Add the storyId to the story map
+            story["storyId"] = storyID
+            stories = append(stories, story)
+        }
+    }
 
-	// Send the response with all stories for the user
-	successResponse := models.Response{
-		Status:  true,
-		Message: "Stories retrieved successfully",
-		Data:    stories,
-	}
-	respondWithJSON(w, http.StatusOK, successResponse)
-
+    // Send the response with all stories and their IDs for the user
+    successResponse := models.Response{
+        Status:  true,
+        Message: "Stories retrieved successfully",
+        Data:    stories,
+    }
+    respondWithJSON(w, http.StatusOK, successResponse)
 }
