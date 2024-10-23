@@ -11,10 +11,13 @@ import (
 )
 
 func main() {
+    fs := http.FileServer(http.Dir("./uploads"))
+    http.Handle("/uploads/", http.StripPrefix("/uploads/", fs))
     fmt.Println("Hello, world!")
     controllers.InitDB()
     defer controllers.DB.Close()
     controllers.Initialize(controllers.DB);
+    
 
     r:= routers.NewRouter();
     c := cors.New(cors.Options{
